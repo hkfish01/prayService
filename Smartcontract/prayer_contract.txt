@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract PrayerService is ReentrancyGuard, Ownable {
+    uint256 public constant PLATFORM_FEE = 5; // 5%
+    uint256 public serviceCounter = 0;
+    uint256 public requestCounter = 0;
+    uint256 public transactionCounter = 0;
+    
+    struct Service {
+        uint256 id;
+        address provider;
+        string title;
+        string description;
+        string imageUrl;
+        uint256 price; // in wei
+        string contactMethod; // encrypted contact info
+        bool isActive;
+        uint256 createdAt;
+    }
+    
+    struct Request {
+        uint256 id;
+        address requester;
+        string title;
+        string description;
+        string imageUrl;
+        uint256 price; // in wei
+        bool isActive;
+        uint256 createdAt;
+    }
+    
+    struct Transaction {
+        uint256 id;
+        address requester;
+        address provider;
+        uint256 serviceId;
+        uint256 amount;
+        uint256 platformFee;
+        uint256 timestamp;
+        bool isCompleted;
+        string contactInfo; // encrypted contact exchange
+    }
+    
+    mapping(uint256 => Service) public services;
+    mapping(uint256 => Request) public requests;
+    mapping(uint256 => Transaction) public transactions;
+    mapping(address => uint256[]) public userServices;
+    mapping(address => uint256[]) public userRequests;
+    mapping(address => uint256[]) public userTransactions;
+    
+    event ServiceCreated(uint256 indexed serviceId, address indexed provider, string title, uint256 price);
+    event RequestCreated(uint256 indexed requestId, address indexed requester, string title, uint256 price);
+    event ServicePurchased(uint256 indexed transactionId, uint256 indexed serviceId, address indexed requester, address provider, uint256 amount);
+    event ContactExchanged(uint256 indexed transactionId, string contactInfo);
+    
+    constructor() Ownable(msg.sender) {}
+    
+    function createService(
+        string memory _title,
+        string memory _description,
+        string memory _imageUrl,
+        uint256 _price,
+        string memory _contactMethod
+    ) external {
+        require(bytes(_title).length > 0, "Title required");
+        require(_price > 0, "Price must be greater than 0");
+        
+        serviceCounter++;
+        services[serviceCounter] = Service({
+            id: serviceCounter,
+            provider: msg.sender,
+            title: _title,
+            description: _description,
+            imageUrl: _imageUrl,
+            price: _price,
+            contactMethod: _contactMethod,
+            isActive: true,
+            createdAt: block.timestamp
+        });
+        
+        userServices[msg.sender].push(serviceCounter);
+        emit ServiceCreated(serviceCounter, msg.sender, _title, _price);
+    }
+    
+    function createRequest(
+        string memory _title,
+        string memory _description,
+        string memory _imageUrl,
+        uint256 _price
+    ) external {
+        require(bytes(_title).length > 0, "Title required");
+        require(_price > 0, "Price must be greater than 0");
+        
+        requestCounter++;
+        requests[requestCounter] = Request({
+            id: requestCounter,
+            requester: msg.sender,
+            title: _title,
+            description: _description,
+            imageUrl: _imageUrl,
+            price: _price,
+            isActive: true,
+            createdAt: block.timestamp
+        });
+        
+        userRequests[msg.sender].push(requestCounter);
+        emit RequestCreated(requestCounter, msg.sender, _title, _price);
+    }
+    
+    function purchaseService(uint256 _serviceId, string memory _contactInfo) external payable nonReentrant {
+        require(services[_serviceId].isActive, "Service not active");
+        require(msg.value == services[_serviceId].price, "Incorrect payment amount");
+        require(services[_serviceId].provider != msg.sender, "Cannot purchase own service");
+        
+        Service storage service = services[_serviceId];
+        uint256 platformFee = (msg.value * PLATFORM_FEE) / 100;
+        uint256 providerAmount = msg.value - platformFee;
+        
+        transactionCounter++;
+        transactions[transactionCounter] = Transaction({
+            id: transactionCounter,
+            requester: msg.sender,
+            provider: service.provider,
+            serviceId: _serviceId,
+            amount: msg.value,
+            platformFee: platformFee,
+            timestamp: block.timestamp,
+            isCompleted: true,
+            contactInfo: _contactInfo
+        });
+        
+        userTransactions[msg.sender].push(transactionCounter);
+        userTransactions[service.provider].push(transactionCounter);
+        
+        // Transfer payment to provider
+        payable(service.provider).transfer(providerAmount);
+        
+        emit ServicePurchased(transactionCounter, _serviceId, msg.sender, service.provider, msg.value);
+        emit ContactExchanged(transactionCounter, _contactInfo);
+    }
+    
+    function deactivateService(uint256 _serviceId) external {
+        require(services[_serviceId].provider == msg.sender, "Not service owner");
+        services[_serviceId].isActive = false;
+    }
+    
+    function deactivateRequest(uint256 _requestId) external {
+        require(requests[_requestId].requester == msg.sender, "Not request owner");
+        requests[_requestId].isActive = false;
+    }
+    
+    function getAllServices() external view returns (Service[] memory) {
+        uint256 activeCount = 0;
+        
+        // Count active services
+        for (uint256 i = 1; i <= serviceCounter; i++) {
+            if (services[i].isActive) {
+                activeCount++;
+            }
+        }
+        
+        Service[] memory activeServices = new Service[](activeCount);
+        uint256 index = 0;
+        
+        for (uint256 i = 1; i <= serviceCounter; i++) {
+            if (services[i].isActive) {
+                activeServices[index] = services[i];
+                index++;
+            }
+        }
+        
+        return activeServices;
+    }
+    
+    function getAllRequests() external view returns (Request[] memory) {
+        uint256 activeCount = 0;
+        
+        // Count active requests
+        for (uint256 i = 1; i <= requestCounter; i++) {
+            if (requests[i].isActive) {
+                activeCount++;
+            }
+        }
+        
+        Request[] memory activeRequests = new Request[](activeCount);
+        uint256 index = 0;
+        
+        for (uint256 i = 1; i <= requestCounter; i++) {
+            if (requests[i].isActive) {
+                activeRequests[index] = requests[i];
+                index++;
+            }
+        }
+        
+        return activeRequests;
+    }
+    
+    function getUserServices(address _user) external view returns (uint256[] memory) {
+        return userServices[_user];
+    }
+    
+    function getUserRequests(address _user) external view returns (uint256[] memory) {
+        return userRequests[_user];
+    }
+    
+    function getUserTransactions(address _user) external view returns (uint256[] memory) {
+        return userTransactions[_user];
+    }
+    
+    function withdrawPlatformFees() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+    
+    function getContractBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+}
